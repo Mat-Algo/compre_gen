@@ -1,0 +1,8 @@
+manim==0.19.0
+manim-voiceover==0.3.7
+requests==2.32.3
+ffmpeg==1.4
+ffmpeg-python==0.2.0
+Flask==3.1.0
+google-genai==1.5.0
+elevenlabs==0.2.27
