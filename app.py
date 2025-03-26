@@ -15,8 +15,6 @@ VIDEO_DIR = os.getenv("VIDEO_DIR", "videos")
 
 app = Flask(__name__, static_folder=VIDEO_DIR)
 
-def sanitize_filename(topic: str) -> str:
-    return re.sub(r'[^\w\-_]', '_', topic)
 
 # def get_youtube_references(prompt: str, n: int = 3) -> list[str]:
 #     """Ask Gemini for n YouTube URLs relevant to the prompt."""
