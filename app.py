@@ -66,7 +66,6 @@ def generate_video():
         # youtube_refs = get_youtube_references(topic)
         try:
             os.remove(py_file)
-            os.remove()
         except Exception as cleanup_err:
             print(f"Warning: Failed to delete temp file {py_file}: {cleanup_err}")
 
