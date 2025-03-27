@@ -1,6 +1,6 @@
 FROM python:3.11-slim
 
-# System + build dependencies for Manim, pycairo, and LaTeX
+# System + build dependencies for Manim, pycairo, and LaTeX.
 RUN apt-get update && apt-get install -y \
       build-essential \
       pkg-config \
