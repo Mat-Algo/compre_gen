@@ -1,5 +1,6 @@
 import os
-from flask import Flask, request, jsonify, send_from_directory
+import asyncio
+from quart import Quart, request, jsonify, send_from_directory
 from dotenv import load_dotenv
 import shutil
 from gen import (
@@ -13,8 +14,7 @@ from gen import (
 load_dotenv(override=True)
 VIDEO_DIR = os.getenv("VIDEO_DIR", "videos")
 
-app = Flask(__name__, static_folder=VIDEO_DIR)
-
+app = Quart(__name__, static_folder=VIDEO_DIR)
 
 # def get_youtube_references(prompt: str, n: int = 3) -> list[str]:
 #     """Ask Gemini for n YouTube URLs relevant to the prompt."""
@@ -33,23 +33,7 @@ app = Flask(__name__, static_folder=VIDEO_DIR)
 #     except Exception:
 #         return [u.strip() for u in raw.splitlines() if u.startswith("http")]
 
-@app.route("/generate_video", methods=["POST"])
-def generate_video():
-    data = request.get_json(force=True)
-    question = data["question"]
-    user_ans = data["user_answer"]
-
-    # Build a detailed prompt that instructs the AI to explain the expected answer,
-    # highlight differences with the user answer, and suggest improvements.
-    topic = (
-        f"Here’s a question: “{question}”.\n"
-        f"The user answered: “{user_ans}”.\n\n"
-        "Generate a short explanatory video script that:\n"
-        "1️⃣ Explains the expected answer in detail.\n"
-        "2️⃣ Points out where the user's answer is missing or incorrect.\n"
-        "3️⃣ Provides clear guidance on how to improve to reach the expected answer."
-    )
-
+async def background_video_generation(topic):
     try:
         code = generate_voiceover_manim_code(topic)
 
@@ -77,12 +61,31 @@ def generate_video():
         else:
             print("Folder does not exist.")
 
-        return jsonify({
-            "video_path": f"videos/{short_name}",
-        }), 200
-
+        print(f"Video generated: videos/{short_name}")
     except Exception as e:
-        return jsonify({"error": str(e)}), 500
+        print(f"Error generating video: {e}")
+
+@app.route("/generate_video", methods=["POST"])
+async def generate_video():
+    data = await request.get_json(force=True)
+    question = data["question"]
+    user_ans = data["user_answer"]
+
+    # Build a detailed prompt that instructs the AI to explain the expected answer,
+    # highlight differences with the user answer, and suggest improvements.
+    topic = (
+        f"Here’s a question: “{question}”.\n"
+        f"The user answered: “{user_ans}”.\n\n"
+        "Generate a short explanatory video script that:\n"
+        "1️⃣ Explains the expected answer in detail.\n"
+        "2️⃣ Points out where the user's answer is missing or incorrect.\n"
+        "3️⃣ Provides clear guidance on how to improve to reach the expected answer."
+    )
+
+    # Run video generation in the background to avoid timeout issues.
+    asyncio.create_task(background_video_generation(topic))
+    
+    return jsonify({"message": "Video is being generated"}), 200
 
 @app.route("/videos/<path:filename>")
 def serve_video(filename):
