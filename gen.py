@@ -107,6 +107,7 @@ WARNING:
       with:
       code = Code(...); code.scale(0.6)
       This avoids the TypeError: unexpected keyword argument 'font_size'.
+    - Make sure there is no overlap between frames and writings and eveeruthing is inside the frame.
     """.strip()
 
     prompt = base_prompt
