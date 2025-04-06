@@ -1,2 +1,8 @@
 .env
 media
+Include
+Lib
+__pycache__
+Scripts
+*.pyc
+pyvenv.cfg
