@@ -87,79 +87,11 @@ Use the plugin "manim-voiceover" with the ElevenLabsService for narration . The 
 7) Use animations like Write, Create, Transform, LaggedStartMap, ShowCreation, FadeIn/Out, and context animations.
 
 Output ONLY the Python code in triple backticks.
-8)TO ENSURE CONTENT IS IN SAME FRAME: To ensure that all content remains within the frame and that elements do not overlap undesirably in your Manim animations, consider the following strategies:
+8)TO ENSURE CONTENT IS IN SAME FRAME: Fade out or remove previous objects: For example, after a section you can use self.play(FadeOut(mobject)) or self.remove(mobject) to clear the scene.
 
-Set Precise Positions Using Frame Dimensions: Manim's frame has predefined boundaries:
+Reposition the objects: Ensure that each new text is placed in a non-overlapping area if you want them to remain visible.
 
-config.frame_width​
-Stack Overflow
-+5
-Manim Community | Documentation
-+5
-GitHub
-+5
-
-config.frame_height​
-Manim Community | Documentation
-
-config.frame_x_radius (half of frame_width)​
-Manim Community | Documentation
-
-config.frame_y_radius (half of frame_height)​
-
-You can use these to position objects accurately. For example, to place an object at the right edge:
-
-from manim import *
-
-class ExampleScene(Scene):
-    def construct(self):
-        square = Square()
-        square.move_to(RIGHT * config.frame_x_radius)
-        self.add(square)
-This positions the center of the square at the right edge of the frame. Adjusting by half the object's width ensures it remains fully visible.
-
-Utilize z_index to Manage Overlapping: Control the rendering order of objects using the z_index attribute. Higher z_index values bring objects to the front:
-
-python
-Copy
-Edit
-circle = Circle()
-square = Square()
-circle.set_z_index(1)
-square.set_z_index(2)  # Square will appear in front of the circle
-self.add(circle, square)
-This method ensures that the square is rendered above the circle, preventing unintended overlaps.
-
-Group Objects to Maintain Relative Positions: When multiple objects should maintain their relative positions, group them using VGroup:
-
-python
-Copy
-Edit
-text = Text("Example")
-box = SurroundingRectangle(text)
-group = VGroup(text, box)
-group.move_to(ORIGIN)  # Center the group in the frame
-self.add(group)
-This keeps the text and its surrounding box together, ensuring they move as a unit and maintain their spatial relationship.
-
-Use scale() to Fit Large Objects Within the Frame: If an object is too large, scale it down to fit within the frame:
-
-python
-Copy
-Edit
-large_text = Text("This is a very long text")
-if large_text.width > config.frame_width:
-    large_text.scale(config.frame_width / large_text.width)
-self.add(large_text)
-This scales the text proportionally to fit within the frame's width.
-
-Leverage self.bring_to_front() and self.bring_to_back(): These methods adjust the rendering order dynamically:
-
-python
-Copy
-Edit
-self.bring_to_front(square)
-self.bring_to_back(circle)
+Clear the scene: You can also use self.clear() to remove all objects before drawing new ones if that fits your intended animation.
 
 WARNING: 
     - Whenever using the Code class in Manim to display code snippets, avoid passing code= as a keyword argument. Instead, pass the code string as a positional argument. For example, replace:
