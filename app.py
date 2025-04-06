@@ -9,47 +9,73 @@ from gen import (
     generate_voiceover_manim_code,
     write_manim_file,
     render_voiceover_scene,
-    client,
     extract_code,
 )
+from google import genai  # Using the Google Gen AI package for Gemini
 
 load_dotenv(override=True)
 VIDEO_DIR = os.getenv("VIDEO_DIR", "videos")
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")  # Set your Gemini API key here
+
+# Initialize the Gemini client
+client = genai.Client(api_key=GEMINI_API_KEY)
 
 app = Quart(__name__, static_folder=VIDEO_DIR)
 app = cors(app, allow_origin="*")
 
 def get_youtube_references(prompt: str, n: int = 3) -> list[dict]:
-    """Ask LLM for n YouTube URLs relevant to the prompt and return with titles."""
+    """Ask Gemini for n YouTube video URLs relevant to the prompt and return with titles."""
     youtube_prompt = (
-        f"Provide {n} YouTube video URLs that best explain: {prompt}. "
+        f"Provide {n} YouTube video URLs that best explain the topic in: {prompt}. "
         "Return as a JSON array of objects with 'title' and 'url' fields."
     )
-    resp = client.models.generate_content(
+    response = client.models.generate_content(
         model="gemini-2.0-flash",
         contents=youtube_prompt
     )
-    raw = resp.text.strip()
+    raw = response.text.strip()
+    print("Raw response:")
+    print(raw)
+    
+    # Remove Markdown code fences if present
+    if raw.startswith("```"):
+        lines = raw.splitlines()
+        # Remove the first line if it starts with ``` (optionally with language tag)
+        if lines[0].startswith("```"):
+            lines = lines[1:]
+        # Remove the last line if it is just ```
+        if lines and lines[-1].startswith("```"):
+            lines = lines[:-1]
+        raw = "\n".join(lines).strip()
+    
     try:
-        # Try to parse as JSON
-        return json.loads(raw)
-    except Exception:
-        # Fallback to parsing lines and creating basic objects
-        urls = [u.strip() for u in raw.splitlines() if u.startswith("http")]
-        return [{"title": f"Reference Video {i+1}", "url": url} for i, url in enumerate(urls)]
+        parsed = json.loads(raw)
+        print("Parsed YouTube references:")
+        print(parsed)
+        return parsed
+    except Exception as e:
+        print("Error parsing YouTube JSON:", e)
+        urls = [u.strip() for u in raw.splitlines() if u.strip().startswith("http")]
+        fallback = [{"title": f"Reference Video {i+1}", "url": url} for i, url in enumerate(urls)]
+        print("Fallback YouTube references:")
+        print(fallback)
+        return fallback
+
 
 def get_article_references(prompt: str, n: int = 2) -> list[dict]:
-    """Ask LLM for n article URLs relevant to the prompt and return with titles."""
+    """Ask Gemini for n article URLs relevant to the prompt and return with titles."""
     article_prompt = (
-        f"Provide {n} educational article or resource URLs that best explain: {prompt}. "
+        f"Provide {n} educational article or resource URLs that best explains the topic in: {prompt}. "
         "Prefer academic sources, educational websites, or reputable publications. "
         "Return as a JSON array of objects with 'title' and 'url' fields."
     )
-    resp = client.models.generate_content(
+    response = client.models.generate_content(
         model="gemini-2.0-flash",
         contents=article_prompt
     )
-    raw = resp.text.strip()
+    raw = response.text.strip()
+    print("HEYOOOOOO")
+    print(raw)
     try:
         # Try to parse as JSON
         return json.loads(raw)
@@ -58,27 +84,30 @@ def get_article_references(prompt: str, n: int = 2) -> list[dict]:
         urls = [u.strip() for u in raw.splitlines() if u.startswith("http")]
         return [{"title": f"Reference Article {i+1}", "url": url} for i, url in enumerate(urls)]
 
-async def background_mcq_review(topic, question):
-    """Process MCQ review in the background."""
+async def background_video_generation(topic: str, question: str):
+    """Process video generation in the background without blocking.
+       This function generates the video, obtains references via Gemini,
+       and writes a JSON response file with the video resource details.
+    """
     try:
         code = generate_voiceover_manim_code(topic)
         py_file, uuid_slug = write_manim_file(code)
         rendered_path = render_voiceover_scene(py_file)
 
         os.makedirs(VIDEO_DIR, exist_ok=True)
-        short_name = f"{uuid_slug}.mp4"
+        short_name = f"{uuid_slug}.mp4"              
         dest = os.path.join(VIDEO_DIR, short_name)
         shutil.copy(rendered_path, dest)
 
-        # Get video references
+        # Generate relevant video references using Gemini
         youtube_refs = get_youtube_references(question)
         article_refs = get_article_references(question)
 
         # Generate video title based on the question
         video_title = f"Explanation: {question[:50]}..." if len(question) > 50 else f"Explanation: {question}"
-        
+
         # Prepare response object
-        response = {
+        response_obj = {
             "resources": {
                 "video": {
                     "title": video_title,
@@ -92,9 +121,64 @@ async def background_mcq_review(topic, question):
         # Save response to a file so it can be retrieved later
         response_file = os.path.join(VIDEO_DIR, f"{uuid_slug}.json")
         with open(response_file, 'w') as f:
-            json.dump(response, f)
+            json.dump(response_obj, f)
 
-        # Cleanup
+        # Cleanup temporary files
+        try:
+            os.remove(py_file)
+        except Exception as cleanup_err:
+            print(f"Warning: Failed to delete temp file {py_file}: {cleanup_err}")
+
+        folder_path = "media"
+        if os.path.exists(folder_path) and os.path.isdir(folder_path):
+            shutil.rmtree(folder_path)
+            print("Folder deleted successfully.")
+        else:
+            print("Folder does not exist.")
+
+        print(f"Video generated: videos/{short_name}")
+        return uuid_slug
+    except Exception as e:
+        print(f"Error generating video: {e}")
+        return None
+
+async def background_mcq_review(topic: str, question: str):
+    """Process MCQ review in the background."""
+    try:
+        code = generate_voiceover_manim_code(topic)
+        py_file, uuid_slug = write_manim_file(code)
+        rendered_path = render_voiceover_scene(py_file)
+
+        os.makedirs(VIDEO_DIR, exist_ok=True)
+        short_name = f"{uuid_slug}.mp4"
+        dest = os.path.join(VIDEO_DIR, short_name)
+        shutil.copy(rendered_path, dest)
+
+        # Get video references using Gemini
+        youtube_refs = get_youtube_references(question)
+        article_refs = get_article_references(question)
+
+        # Generate video title based on the question
+        video_title = f"Explanation: {question[:50]}..." if len(question) > 50 else f"Explanation: {question}"
+        
+        # Prepare response object
+        response_obj = {
+            "resources": {
+                "video": {
+                    "title": video_title,
+                    "url": f"/videos/{short_name}"
+                },
+                "ref_videos": youtube_refs,
+                "ref_articles": article_refs
+            }
+        }
+
+        # Save response to a file so it can be retrieved later
+        response_file = os.path.join(VIDEO_DIR, f"{uuid_slug}.json")
+        with open(response_file, 'w') as f:
+            json.dump(response_obj, f)
+
+        # Cleanup temporary files
         try:
             os.remove(py_file)
         except Exception as cleanup_err:
@@ -131,96 +215,53 @@ async def generate_video():
         "3️⃣ Provides clear guidance on how to improve to reach the expected answer."
     )
 
-    # Start the task but don't wait for it
-    task = asyncio.create_task(background_video_generation(topic))
+    # Start the task but don't wait for it; pass both topic and question for reference generation
+    asyncio.create_task(background_video_generation(topic, question))
     
     # Return immediate response
     return jsonify({"message": "Video is being generated"}), 202
 
 @app.route("/review/mcq", methods=["POST"])
 async def review_mcq():
-    """Handle MCQ review requests and start background processing."""
+    """MCQ review request that returns a video path along with relevant references."""
     try:
         data = await request.get_json(force=True)
-        
+
         # Validate required fields
         if not all(k in data for k in ["question", "selected_option", "expected_answer"]):
             return jsonify({"error": "Missing required fields"}), 400
-        
+
         question = data["question"]
         user_ans = data["selected_option"]
         correct_ans = data["expected_answer"]
 
-        # Build a prompt for MCQ review that compares user answer to correct answer
-        topic = (
-            f"Here's a multiple-choice question: \"{question}\".\n"
-            f"The user selected answer: \"{user_ans}\".\n"
-            f"The correct answer is: \"{correct_ans}\".\n\n"
-            "Generate a short explanatory video script that:\n"
-            "1️⃣ Explains why the correct answer is right.\n"
-            "2️⃣ If the user's answer is wrong, explain the misconception or error.\n"
-            "3️⃣ Provide key concepts to remember for similar questions in the future."
-        )
+        uuid = "gen-" + str(abs(hash(question + user_ans + correct_ans)))[:8]
+        video_path = f"/videos/{uuid}.mp4"
 
-        # Get references first (these are faster operations)
+        # Get references using Gemini
         youtube_refs = get_youtube_references(question)
         article_refs = get_article_references(question)
-        
-        # Start the longer video generation process in background
-        task = asyncio.create_task(background_mcq_review(topic, question))
-        
-        # Generate a placeholder UUID for now - we'll use this to check status later
-        # The actual UUID will be generated in the background task
-        temp_uuid = "pending-" + str(hash(question + user_ans + correct_ans))[:8]
-        
-        # Return immediate response with references but placeholder for video
-        response = {
+        print(youtube_refs)
+        print(article_refs)
+
+        # Response object
+        response_obj = {
             "resources": {
                 "video": {
                     "title": f"Explanation: {question[:50]}..." if len(question) > 50 else f"Explanation: {question}",
-                    "url": f"/status/mcq/{temp_uuid}"  # Client should poll this endpoint
+                    "url": video_path
                 },
                 "ref_videos": youtube_refs,
                 "ref_articles": article_refs
             }
         }
-        
-        return jsonify(response), 202  # 202 Accepted indicates processing has begun
-            
+
+        return jsonify(response_obj), 200
+
     except Exception as e:
-        print(f"Error in review_mcq endpoint: {e}")
+        print(f"Error in review_mcq mock: {e}")
         return jsonify({"error": str(e)}), 500
 
-async def background_video_generation(topic):
-    """Process video generation in the background without blocking."""
-    try:
-        code = generate_voiceover_manim_code(topic)
-        py_file, uuid_slug = write_manim_file(code)
-        rendered_path = render_voiceover_scene(py_file)
-
-        os.makedirs(VIDEO_DIR, exist_ok=True)
-        short_name = f"{uuid_slug}.mp4"              
-        dest = os.path.join(VIDEO_DIR, short_name)
-        shutil.copy(rendered_path, dest)
-
-        # Cleanup temporary files
-        try:
-            os.remove(py_file)
-        except Exception as cleanup_err:
-            print(f"Warning: Failed to delete temp file {py_file}: {cleanup_err}")
-
-        folder_path = "media"
-        if os.path.exists(folder_path) and os.path.isdir(folder_path):
-            shutil.rmtree(folder_path)
-            print("Folder deleted successfully.")
-        else:
-            print("Folder does not exist.")
-
-        print(f"Video generated: videos/{short_name}")
-        return uuid_slug
-    except Exception as e:
-        print(f"Error generating video: {e}")
-        return None
 @app.route("/videos/<path:filename>")
 def serve_video(filename):
     return send_from_directory(VIDEO_DIR, filename)
@@ -234,8 +275,8 @@ async def mcq_status(uuid_slug):
     if os.path.exists(video_path) and os.path.exists(response_path):
         # Video is ready, return the stored response
         with open(response_path, 'r') as f:
-            response = json.load(f)
-        return jsonify(response), 200
+            response_obj = json.load(f)
+        return jsonify(response_obj), 200
     elif os.path.exists(video_path):
         # Video exists but response file is missing - generate a minimal response
         return jsonify({

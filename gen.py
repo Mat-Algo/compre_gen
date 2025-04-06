@@ -63,24 +63,16 @@ def validate_code(code: str):
         raise ValueError("Invalid Python code generated.") from se
 
 def generate_voiceover_manim_code(topic: str, max_attempts=5) -> str:
-    """
-    Uses Gemini to generate a Manim code snippet that uses:
-      - from manim_voiceover import VoiceoverScene
-      - from manim_voiceover.services.elevenlabs import ElevenLabsService
-    to produce a short, self-contained demonstration about the 'topic' with spoken narration.
-
-    Returns valid, syntax-checked Python code as a string.
-    """
     base_prompt = f"""
 You are an expert educator and Manim developer. Generate a complete, executable Manim script explaining the topic in detail in a visually understadable way: '{topic}'.
-Use the plugin "manim-voiceover" with the ElevenLabsService for narration. The code must:
+Use the plugin "manim-voiceover" with the ElevenLabsService for narration . The code must:
 
 1) Import:
    from manim_voiceover import VoiceoverScene
    from manim_voiceover.services.elevenlabs import ElevenLabsService
    from manim import *
 
-2) Have exactly ONE Scene subclass that inherits from VoiceoverScene, e.g. class TopicVoiceoverScene(VoiceoverScene):
+2) Have exactly ONE Scene subclass that inherits from VoiceoverScene, e.g. class TopicVoiceoverScene(VoiceoverScene): but MAKE SURE NOT TO OVERLAP FRAMES FROM LAST WRITING, the writings should not overlap under any circumstances.
 
 3) In construct(), set the TTS service with:
    self.set_speech_service(ElevenLabsService(voice_id="21m00Tcm4TlvDq8ikWAM"))
@@ -95,6 +87,79 @@ Use the plugin "manim-voiceover" with the ElevenLabsService for narration. The c
 7) Use animations like Write, Create, Transform, LaggedStartMap, ShowCreation, FadeIn/Out, and context animations.
 
 Output ONLY the Python code in triple backticks.
+8)TO ENSURE CONTENT IS IN SAME FRAME: To ensure that all content remains within the frame and that elements do not overlap undesirably in your Manim animations, consider the following strategies:
+
+Set Precise Positions Using Frame Dimensions: Manim's frame has predefined boundaries:
+
+config.frame_width​
+Stack Overflow
++5
+Manim Community | Documentation
++5
+GitHub
++5
+
+config.frame_height​
+Manim Community | Documentation
+
+config.frame_x_radius (half of frame_width)​
+Manim Community | Documentation
+
+config.frame_y_radius (half of frame_height)​
+
+You can use these to position objects accurately. For example, to place an object at the right edge:
+
+from manim import *
+
+class ExampleScene(Scene):
+    def construct(self):
+        square = Square()
+        square.move_to(RIGHT * config.frame_x_radius)
+        self.add(square)
+This positions the center of the square at the right edge of the frame. Adjusting by half the object's width ensures it remains fully visible.
+
+Utilize z_index to Manage Overlapping: Control the rendering order of objects using the z_index attribute. Higher z_index values bring objects to the front:
+
+python
+Copy
+Edit
+circle = Circle()
+square = Square()
+circle.set_z_index(1)
+square.set_z_index(2)  # Square will appear in front of the circle
+self.add(circle, square)
+This method ensures that the square is rendered above the circle, preventing unintended overlaps.
+
+Group Objects to Maintain Relative Positions: When multiple objects should maintain their relative positions, group them using VGroup:
+
+python
+Copy
+Edit
+text = Text("Example")
+box = SurroundingRectangle(text)
+group = VGroup(text, box)
+group.move_to(ORIGIN)  # Center the group in the frame
+self.add(group)
+This keeps the text and its surrounding box together, ensuring they move as a unit and maintain their spatial relationship.
+
+Use scale() to Fit Large Objects Within the Frame: If an object is too large, scale it down to fit within the frame:
+
+python
+Copy
+Edit
+large_text = Text("This is a very long text")
+if large_text.width > config.frame_width:
+    large_text.scale(config.frame_width / large_text.width)
+self.add(large_text)
+This scales the text proportionally to fit within the frame's width.
+
+Leverage self.bring_to_front() and self.bring_to_back(): These methods adjust the rendering order dynamically:
+
+python
+Copy
+Edit
+self.bring_to_front(square)
+self.bring_to_back(circle)
 
 WARNING: 
     - Whenever using the Code class in Manim to display code snippets, avoid passing code= as a keyword argument. Instead, pass the code string as a positional argument. For example, replace:
@@ -108,6 +173,8 @@ WARNING:
       code = Code(...); code.scale(0.6)
       This avoids the TypeError: unexpected keyword argument 'font_size'.
     - Make sure there is no overlap between frames and writings and eveeruthing is inside the frame.
+
+MAKE SURE NOT TO OVERLAP FRAMES FROM LAST WRITING, the writings should not overlap under any circumstances.
     """.strip()
 
     prompt = base_prompt
