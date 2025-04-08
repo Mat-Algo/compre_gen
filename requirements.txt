@@ -8,4 +8,5 @@ google-genai==1.5.0
 elevenlabs==0.2.27
 Quart==0.20.0
 quart-cors==0.6.0
-hypercorn
+hypercorn==0.17.3
+fastapi==0.115.12
