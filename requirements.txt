@@ -11,3 +11,4 @@ quart-cors==0.6.0
 hypercorn==0.17.3
 fastapi==0.115.12
 boto3==1.37.29
+mangum
