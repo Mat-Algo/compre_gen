@@ -27,6 +27,9 @@ jobs:
           service_account_key: ${{ secrets.GCP_SA_KEY }}
           export_default_credentials: true
 
+      - name: Check gcloud auth (debug)
+        run: gcloud auth list
+
       - name: Submit Cloud Build for service image
         run: |
           gcloud builds submit --tag $SERVICE_IMAGE --timeout=1200
