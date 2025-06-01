@@ -11,8 +11,8 @@ jobs:
     env:
       PROJECT_ID: gen-lang-client-0755469978
       REGION: us-central1
-      SERVICE_NAME: api-service
-      JOB_NAME: worker-job
+      SERVICE_NAME: my-api-service
+      JOB_NAME: my-worker-job
       SERVICE_IMAGE: gcr.io/gen-lang-client-0755469978/api-service
       JOB_IMAGE: gcr.io/gen-lang-client-0755469978/worker-job
 
