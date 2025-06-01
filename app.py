@@ -1,40 +1,50 @@
 import os
 import json
-import shutil
 import logging
 import boto3
 import hashlib
 from fastapi import FastAPI, BackgroundTasks, HTTPException
-from fastapi.responses import JSONResponse, FileResponse, HTMLResponse
+from fastapi.responses import JSONResponse, HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
+import os
+from pydub.utils import which
+from pydub import AudioSegment
 from dotenv import load_dotenv
+from google import genai
+import google.auth
+import google.auth.transport.requests
+import requests
 
-# Load environment variables from .env file, if present
+# Load environment variables from .env file if present
 load_dotenv(override=True)
 
-# Import your existing functions from gen.py
-from gen import (
-    generate_voiceover_manim_code,
-    write_manim_file,
-    render_voiceover_scene,
-    client,
-    extract_code,
-)
+import os
+GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+client = genai.Client(api_key=GEMINI_API_KEY)
 
+os.environ["PATH"] += os.pathsep + "/usr/bin"
+AudioSegment.converter = which("ffmpeg")
+stage = "test"
+
+# Import your pipeline functions from gen.py
+from gen import (
+    generate_outline,
+    generate_code,
+    write_temp,
+    render_voiceover_scene,
+)
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 
-# Local video directory (in case S3 is not used)
-VIDEO_DIR = os.getenv("VIDEO_DIR", "videos")
-os.makedirs(VIDEO_DIR, exist_ok=True)
+# S3 configuration (using S3 exclusively)
+S3_BUCKET = os.getenv("S3_BUCKET")  # e.g., "compre_gen"
+if not S3_BUCKET:
+    raise Exception("S3_BUCKET environment variable must be configured.")
 
-# S3 configuration (if set, files will be uploaded to S3/CDN)
-S3_BUCKET = os.getenv("S3_BUCKET")  # e.g., "my-video-bucket"
-# AWS credentials (set via environment: AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_DEFAULT_REGION)
-
-# Create FastAPI app instance
-app = FastAPI()
+# Create FastAPI app instance.
+# Using the stage name as part of the root path (optional)
+app = FastAPI(root_path=f"/{stage}" if stage else "")
 
 # Set up CORS (adjust allowed origins as needed)
 app.add_middleware(
@@ -57,20 +67,55 @@ class MCQReviewRequest(BaseModel):
     selected_option: str
     expected_answer: str
 
+
+def trigger_cloud_run_job(job_name, region, project_id, prompt):
+    # Obtain fresh access token
+    credentials, _ = google.auth.default()
+    credentials.refresh(google.auth.transport.requests.Request())
+    token = credentials.token
+
+    url = (
+        f"https://run.googleapis.com/v2/projects/{project_id}"
+        f"/locations/{region}/jobs/{job_name}:run"
+    )
+    headers = {
+        "Authorization": f"Bearer {token}",
+        "Content-Type": "application/json"
+    }
+    # Use the v2 'overrides' schema to inject your prompt as an arg
+    body = {
+        "overrides": {
+            "containerOverrides": [
+                {
+                    "args": [prompt]
+                }
+            ]
+        }
+    }
+
+    resp = requests.post(url, headers=headers, json=body)
+    if resp.status_code == 200:
+        logging.info("Cloud Run Job triggered successfully")
+    else:
+        logging.error(f"Failed to trigger Cloud Run Job: {resp.text}")
+        resp.raise_for_status()
+
+
+
 ###############################################################################
 # Utility Functions
 ###############################################################################
 def generate_video_key(prompt: str) -> str:
     """
     Generate a deterministic key (16 hex characters) based on the given prompt.
-    This helps produce the same file name for the same question and answer.
+    This serves as a unique filename component.
     """
     return hashlib.sha256(prompt.encode()).hexdigest()[:16]
 
 def upload_file_to_s3(local_path: str, s3_key: str) -> str:
     """
-    Upload the file at local_path to the S3 bucket under s3_key.
-    Returns the public URL of the uploaded file.
+    Upload the file at local_path to the S3 bucket using s3_key.
+    Returns the public URL of the uploaded file.    
     """
     s3_client = boto3.client("s3")
     s3_client.upload_file(local_path, S3_BUCKET, s3_key)
@@ -78,7 +123,7 @@ def upload_file_to_s3(local_path: str, s3_key: str) -> str:
     return public_url
 
 ###############################################################################
-# Helper Functions for Reference Retrieval (same as before)
+# Helper Functions for Reference Retrieval (unchanged)
 ###############################################################################
 def get_youtube_references(prompt: str, n: int = 3) -> list:
     youtube_prompt = (
@@ -119,106 +164,84 @@ def get_article_references(prompt: str, n: int = 2) -> list:
         return [{"title": f"Reference Article {i+1}", "url": url} for i, url in enumerate(urls)]
 
 ###############################################################################
-# Background Task Functions
+# Background Task Functions (S3-only)
 ###############################################################################
 def background_video_generation(topic: str) -> tuple:
-    """
-    Generates a video from the Manim voiceover pipeline.
-    The video file is given a deterministic file name (using generate_video_key).
-    If S3 is configured, the file is uploaded and the public URL is returned;
-    otherwise, it is saved locally.
-    Returns a tuple: (video_key, video_url)
-    """
     try:
         logging.info("Generating video for topic: %s", topic)
-        # Generate the video code and file using your existing pipeline
-        code = generate_voiceover_manim_code(topic)
-        py_file, _ = write_manim_file(code)
-        rendered_path = render_voiceover_scene(py_file)
+        outline = generate_outline(topic)
+        code = generate_code(topic, outline)
+        py_file, uid = write_temp(code)
+        rendered_path = render_voiceover_scene(py_file, uid)
+
         
-        # Use a deterministic key (for the given prompt) for naming
         video_key = generate_video_key(topic)
         video_filename = f"{video_key}.mp4"
-        
-        if S3_BUCKET:
-            video_url = upload_file_to_s3(rendered_path, video_filename)
-            logging.info("Video uploaded to S3: %s", video_url)
-        else:
-            local_dest = os.path.join(VIDEO_DIR, video_filename)
-            shutil.copy(rendered_path, local_dest)
-            video_url = f"/videos/{video_filename}"
-            logging.info("Video stored locally at: %s", video_url)
-        
-        # Cleanup temporary files and folders
+
+        video_url = upload_file_to_s3(rendered_path, video_filename)
         try:
             os.remove(py_file)
         except Exception as cleanup_err:
             logging.warning("Failed to delete temp file %s: %s", py_file, cleanup_err)
-        folder_path = "media"
-        if os.path.exists(folder_path) and os.path.isdir(folder_path):
-            shutil.rmtree(folder_path)
-            logging.info("Temporary media folder deleted.")
         
         return video_key, video_url
     except Exception as e:
-        logging.error("Error generating video: %s", e)
+        logging.error("Error generating video: %s", e, exc_info=True)
         return None, None
 
-def background_mcq_review(topic: str, question: str) -> tuple:
-    """
-    Similar to background_video_generation, but for MCQ review.
-    Generates a deterministic video key for the review video.
-    Also writes a JSON file locally (for polling) if not using S3.
-    Returns a tuple: (video_key, video_url)
-    """
-    try:
-        logging.info("Generating MCQ review video for topic: %s", topic)
-        code = generate_voiceover_manim_code(topic)
-        py_file, _ = write_manim_file(code)
-        rendered_path = render_voiceover_scene(py_file)
+# def background_mcq_review(topic: str, question: str) -> tuple:
+#     """
+#     Generates an MCQ review video.
+#     Uses S3 exclusively to store both the video and a JSON response with reference links.
+#     Returns a tuple: (video_key, video_url)
+#     """
+#     try:
+#         logging.info("Generating MCQ review video for topic: %s", topic)
+#         outline = generate_outline(topic)
+#         code = generate_code(topic, outline)
+#         py_file, uid = write_temp(code)
+#         rendered_path = render_voiceover_scene(py_file, uid)
+
         
-        video_key = generate_video_key(topic)
-        video_filename = f"{video_key}.mp4"
+#         video_key = generate_video_key(topic)
+#         video_filename = f"{video_key}.mp4"
         
-        if S3_BUCKET:
-            video_url = upload_file_to_s3(rendered_path, video_filename)
-            logging.info("MCQ review video uploaded to S3: %s", video_url)
-        else:
-            local_dest = os.path.join(VIDEO_DIR, video_filename)
-            shutil.copy(rendered_path, local_dest)
-            video_url = f"/videos/{video_filename}"
-            logging.info("MCQ review video stored locally at: %s", video_url)
+#         if S3_BUCKET:
+#             video_url = upload_file_to_s3(rendered_path, video_filename)
+#             logging.info("MCQ review video uploaded to S3: %s", video_url)
+#         else:
+#             raise Exception("S3_BUCKET is not configured.")
         
-        # Get reference links
-        youtube_refs = get_youtube_references(question)
-        article_refs = get_article_references(question)
-        video_title = f"Explanation: {question[:50]}{'...' if len(question) > 50 else ''}"
-        response = {
-            "resources": {
-                "video": {"title": video_title, "url": video_url},
-                "ref_videos": youtube_refs,
-                "ref_articles": article_refs
-            }
-        }
-        # Save response locally for polling if not on S3
-        response_file = os.path.join(VIDEO_DIR, f"{video_key}.json")
-        with open(response_file, "w") as f:
-            json.dump(response, f)
+#         youtube_refs = get_youtube_references(question)
+#         article_refs = get_article_references(question)
+#         video_title = f"Explanation: {question[:50]}{'...' if len(question) > 50 else ''}"
+#         response = {
+#             "resources": {
+#                 "video": {"title": video_title, "url": video_url},
+#                 "ref_videos": youtube_refs,
+#                 "ref_articles": article_refs
+#             }
+#         }
         
-        # Cleanup temporary files
-        try:
-            os.remove(py_file)
-        except Exception as cleanup_err:
-            logging.warning("Failed to delete temp file %s: %s", py_file, cleanup_err)
-        folder_path = "media"
-        if os.path.exists(folder_path) and os.path.isdir(folder_path):
-            shutil.rmtree(folder_path)
-            logging.info("Temporary media folder deleted.")
+#         json_key = f"{video_key}.json"
+#         s3_client = boto3.client("s3")
+#         s3_client.put_object(
+#             Bucket=S3_BUCKET,
+#             Key=json_key,
+#             Body=json.dumps(response).encode("utf-8"),
+#             ContentType="application/json"
+#         )
+#         logging.info("JSON response uploaded to S3 under key %s", json_key)
         
-        return video_key, video_url
-    except Exception as e:
-        logging.error("Error generating MCQ review video: %s", e)
-        return None, None
+#         try:
+#             os.remove(py_file)
+#         except Exception as cleanup_err:
+#             logging.warning("Failed to delete temp file %s: %s", py_file, cleanup_err)
+        
+#         return video_key, video_url
+#     except Exception as e:
+#         logging.error("Error generating MCQ review video: %s", e, exc_info=True)
+#         return None, None
 
 ###############################################################################
 # API Endpoints
@@ -226,16 +249,11 @@ def background_mcq_review(topic: str, question: str) -> tuple:
 @app.post("/generate_video")
 async def generate_video(request_data: VideoGenerationRequest, background_tasks: BackgroundTasks):
     """
-    Endpoint to trigger video generation for a given question.
-    Uses a deterministic file name so the video URL uniquely corresponds to
-    that question (and answer). The endpoint returns immediately while the
-    video is processed in the background.
+    Triggers video generation for a given question.
+    Returns a message with the computed video key and status endpoint for polling.
     """
     question = request_data.question
     user_ans = request_data.user_answer
-    
-    # Build a detailed prompt for generating the video script.
-    # (You can adjust the prompt contents as needed.)
     prompt = (
         f"Here's a question: \"{question}\".\n"
         f"The user answered: \"{user_ans}\".\n\n"
@@ -244,21 +262,51 @@ async def generate_video(request_data: VideoGenerationRequest, background_tasks:
         "2️⃣ Points out where the user's answer is missing or incorrect.\n"
         "3️⃣ Provides clear guidance on how to improve."
     )
-    # Schedule the video generation task in the background.
-    background_tasks.add_task(background_video_generation, prompt)
-    # Return a message; the actual URL will be available once generation is complete.
-    return JSONResponse(content={"message": "Video generation started for this question"}, status_code=202)
+    trigger_cloud_run_job(
+        job_name="my-worker-job",
+        region="us-central1",
+        project_id="gen-lang-client-0755469978",
+        prompt=prompt
+    )
+    video_key = generate_video_key(prompt)
+    youtube_refs = get_youtube_references(question)
+    article_refs = get_article_references(question)
+    return JSONResponse(content={
+        "resources": {
+            "video": {
+                "status_endpoint": f"/status/video/{video_key}"
+            },
+            "ref_videos": youtube_refs,
+            "ref_articles": article_refs
+        }
+    }, status_code=202)
+
+@app.get("/status/video/{video_key}")
+async def video_status(video_key: str):
+    s3_client = boto3.client("s3")
+    json_key = f"{video_key}.json"
+    try:
+        s3_client.head_object(Bucket=S3_BUCKET, Key=json_key)
+        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=json_key)
+        response_content = obj["Body"].read().decode("utf-8")
+        response_data = json.loads(response_content)
+        return JSONResponse(content=response_data, status_code=200)
+    except s3_client.exceptions.ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == '404':
+            return JSONResponse(content={"status": "processing"}, status_code=202)
+        else:
+            return JSONResponse(content={"error": "Error accessing S3", "details": str(e)}, status_code=500)
 
 @app.post("/review/mcq")
 async def review_mcq(request_data: MCQReviewRequest, background_tasks: BackgroundTasks):
     """
-    Endpoint to trigger MCQ review video generation.
-    Returns reference links immediately while the video is processed in the background.
+    Triggers MCQ review video generation.
+    Returns reference links immediately and indicates the status endpoint for polling.
     """
     question = request_data.question
     user_ans = request_data.selected_option
     correct_ans = request_data.expected_answer
-    
     prompt = (
         f"Here's a multiple-choice question: \"{question}\".\n"
         f"The user selected answer: \"{user_ans}\".\n"
@@ -270,58 +318,50 @@ async def review_mcq(request_data: MCQReviewRequest, background_tasks: Backgroun
     )
     youtube_refs = get_youtube_references(question)
     article_refs = get_article_references(question)
+    # background_tasks.add_task(background_mcq_review, prompt, question)
     
-    background_tasks.add_task(background_mcq_review, prompt, question)
-    
-    # Create a placeholder key for status checking (if using local polling)
-    temp_key = "pending-" + str(hash(question + user_ans + correct_ans))[:8]
-    response = {
+    trigger_cloud_run_job(
+        job_name="my-worker-job",
+        region="us-central1",
+        project_id="gen-lang-client-0755469978",
+        prompt=prompt
+    )
+    # Generate a deterministic video key for this prompt
+    video_key = generate_video_key(prompt)
+    return JSONResponse(content={
         "resources": {
             "video": {
                 "title": f"Explanation: {question[:50]}{'...' if len(question) > 50 else ''}",
-                "url": f"/status/mcq/{temp_key}"
+                "status_endpoint": f"/status/mcq/{video_key}"
             },
             "ref_videos": youtube_refs,
             "ref_articles": article_refs
         }
-    }
-    return JSONResponse(content=response, status_code=202)
-
-@app.get("/videos/{filename}")
-async def serve_video(filename: str):
-    """
-    Serves locally stored video files.
-    (This endpoint is used only if S3 storage is not configured.)
-    """
-    file_path = os.path.join(VIDEO_DIR, filename)
-    if os.path.exists(file_path):
-        return FileResponse(file_path)
-    else:
-        raise HTTPException(status_code=404, detail="Video not found")
+    }, status_code=202)
 
 @app.get("/status/mcq/{video_key}")
 async def mcq_status(video_key: str):
     """
-    Polling endpoint to check the status of an MCQ review video.
-    If the JSON response file for that video exists (when not using S3), return it.
+    Polling endpoint to check for a JSON response stored in S3 with key <video_key>.json.
+    Returns the JSON data if available, otherwise a processing status.
     """
-    video_path = os.path.join(VIDEO_DIR, f"{video_key}.mp4")
-    response_path = os.path.join(VIDEO_DIR, f"{video_key}.json")
-    
-    if os.path.exists(video_path) and os.path.exists(response_path):
-        with open(response_path, "r") as f:
-            response = json.load(f)
-        return JSONResponse(content=response, status_code=200)
-    elif os.path.exists(video_path):
-        return JSONResponse(
-            content={"resources": {"video": {"title": "Explanation Video", "url": f"/videos/{video_key}.mp4"}}},
-            status_code=200
-        )
-    else:
-        return JSONResponse(content={"status": "processing"}, status_code=202)
+    s3_client = boto3.client("s3")
+    json_key = f"{video_key}.json"
+    try:
+        s3_client.head_object(Bucket=S3_BUCKET, Key=json_key)
+        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=json_key)
+        response_content = obj["Body"].read().decode("utf-8")
+        response_data = json.loads(response_content)
+        return JSONResponse(content=response_data, status_code=200)
+    except s3_client.exceptions.ClientError as e:
+        error_code = e.response['Error']['Code']
+        if error_code == '404':
+            return JSONResponse(content={"status": "processing"}, status_code=202)
+        else:
+            return JSONResponse(content={"error": "Error accessing S3", "details": str(e)}, status_code=500)
 
 ###############################################################################
-# Optional: Simple HTML Client for Testing
+# Optional: HTML Client for Testing
 ###############################################################################
 @app.get("/", response_class=HTMLResponse)
 async def index():
@@ -362,14 +402,12 @@ async def index():
     return HTMLResponse(content=html_content)
 
 ###############################################################################
-# Run the Application (for local testing)
+# Run the Application Locally (for testing)
 ###############################################################################
-if __name__ == "__main__":
-    import uvicorn
-    uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
+# if __name__ == "__main__":
+#     import uvicorn
+#     uvicorn.run(app, host="0.0.0.0", port=int(os.getenv("PORT", 8000)))
 
-
-from mangum import Mangum
-
-# Create a Lambda handler for the FastAPI app.
-handler = Mangum(app)
+# # Create a Lambda handler for the FastAPI app.
+# from mangum import Mangum
+# handler = Mangum(app)

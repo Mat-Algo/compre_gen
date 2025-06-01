@@ -1,15 +1,34 @@
-manim==0.19.0
-manim-voiceover==0.3.7
-requests==2.32.3
-ffmpeg==1.4
+# Core Python scientific + ML libs
+llvmlite==0.41.1
+numba==0.58.1
+numpy==1.26.4
+
+# Torch (CPU build, >=2.1)
+torch==2.1.2+cpu
+torchaudio==2.1.2+cpu
+-f https://download.pytorch.org/whl/cpu/torch_stable.html
+
+
+# Manim + voiceover
+manim
+manim-voiceover[elevenlabs,transcribe]==0.3.7
+
+# Video/audio tools
 ffmpeg-python==0.2.0
+
+# Web server + API frameworks
 Flask==3.1.0
-google-genai==1.5.0
-elevenlabs==0.2.27
 Quart==0.20.0
 quart-cors==0.6.0
 hypercorn==0.17.3
 fastapi==0.115.12
 boto3==1.37.29
-mangum
-uvicorn
+mangum==0.19.0
+uvicorn[standard]
+gunicorn
+
+# ML + embedding models
+pinecone==7.0.1
+google-genai==1.5.0
+transformers==4.38.2
+sentence-transformers==2.6.1
