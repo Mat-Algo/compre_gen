@@ -9,3 +9,5 @@ pyvenv.cfg
 playground
 venv
 env
+my-service-account-key.json
+encoded.txt
