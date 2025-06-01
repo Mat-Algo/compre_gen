@@ -51,9 +51,3 @@ jobs:
       - name: Submit Cloud Build for job image
         run: |
           gcloud builds submit --tag $JOB_IMAGE --timeout=3600
-
-      - name: Update Cloud Run job
-        run: |
-          gcloud run jobs update $JOB_NAME \
-            --image $JOB_IMAGE \
-            --region $REGION
