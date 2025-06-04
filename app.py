@@ -287,7 +287,7 @@ async def generate_video(request_data: VideoGenerationRequest, background_tasks:
         job_name="my-worker-job",
         region="us-central1",
         project_id="gen-lang-client-0755469978",
-        prompt=prompt
+        prompt_s3_key=prompt_s3_key
     )
     youtube_refs = get_youtube_references(question)
     article_refs = get_article_references(question)
@@ -344,7 +344,7 @@ async def review_mcq(request_data: MCQReviewRequest, background_tasks: Backgroun
         job_name="my-worker-job",
         region="us-central1",
         project_id="gen-lang-client-0755469978",
-        prompt=prompt
+        prompt_s3_key=prompt_s3_key
     )
     youtube_refs = get_youtube_references(question)
     article_refs = get_article_references(question)
