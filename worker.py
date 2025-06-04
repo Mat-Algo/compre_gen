@@ -24,8 +24,14 @@ if __name__ == "__main__":
         if len(sys.argv) < 2:
             logger.error("No prompt provided. Usage: worker.py <prompt>")
             sys.exit(1)
-        prompt = sys.argv[1]
-        logger.info("Cloud Run job started with prompt: %s", prompt)
+        prompt_s3_key = sys.argv[1]
+        logger.info("Cloud Run job started with prompt_s3_key: %s", prompt_s3_key)
+
+        s3 = boto3.client("s3")
+        obj = s3.get_object(Bucket=S3_BUCKET, Key=prompt_s3_key)
+        prompt = obj['Body'].read().decode('utf-8')
+
+        logger.info("Loaded prompt content (first 500 chars): %s", prompt[:500])
 
         # Call background_video_generation
         logger.info("Running background video generation...")

@@ -22,6 +22,7 @@ load_dotenv(override=True)
 
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 os.environ["PATH"] += os.pathsep + "/usr/bin"
@@ -68,8 +69,18 @@ class MCQReviewRequest(BaseModel):
     selected_option: str
     expected_answer: str
 
+def upload_prompt_to_s3(prompt: str, s3_key: str):
+    s3_client = boto3.client("s3")
+    s3_client.put_object(
+        Bucket=S3_BUCKET,
+        Key=s3_key,
+        Body=prompt.encode("utf-8"),
+        ContentType="text/plain"
+    )
+    return s3_key
 
-def trigger_cloud_run_job(job_name, region, project_id, prompt):
+
+def trigger_cloud_run_job(job_name, region, project_id, prompt_s3_key):
     # Obtain fresh access token
     credentials, _ = google.auth.default()
     credentials.refresh(google.auth.transport.requests.Request())
@@ -88,7 +99,7 @@ def trigger_cloud_run_job(job_name, region, project_id, prompt):
         "overrides": {
             "containerOverrides": [
                 {
-                    "args": [prompt]
+                    "args": [prompt_s3_key]
                 }
             ]
         }
@@ -127,28 +138,34 @@ def upload_file_to_s3(local_path: str, s3_key: str) -> str:
 # Helper Functions for Reference Retrieval (unchanged)
 ###############################################################################
 def get_youtube_references(prompt: str, n: int = 3) -> list:
-    youtube_prompt = (
-        f"Provide {n} YouTube video URLs that best explain the topic in: {prompt}. "
-        "Return as a JSON array of objects with 'title' and 'url' fields."
+    """
+    Use the YouTube Data API to fetch relevant videos for the given prompt.
+    Returns a list of dicts with 'title' and 'url'.
+    """
+    search_query = prompt
+    url = (
+        f"https://www.googleapis.com/youtube/v3/search"
+        f"?part=snippet&maxResults={n}&q={requests.utils.quote(search_query)}"
+        f"&key={YOUTUBE_API_KEY}&type=video"
     )
-    response = client.models.generate_content(model="gemini-2.0-flash", contents=youtube_prompt)
-    raw = response.text.strip()
-    if raw.startswith("```"):
-        lines = raw.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        raw = "\n".join(lines).strip()
+
     try:
-        parsed = json.loads(raw)
-        logging.info("Parsed YouTube references: %s", parsed)
-        return parsed
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        results = []
+
+        for item in data.get("items", []):
+            video_id = item["id"].get("videoId")
+            title = item["snippet"]["title"]
+            if video_id:
+                video_url = f"https://www.youtube.com/watch?v={video_id}"
+                results.append({"title": title, "url": video_url})
+
+        return results
     except Exception as e:
-        logging.error("Error parsing YouTube JSON: %s", e)
-        urls = [u.strip() for u in raw.splitlines() if u.strip().startswith("http")]
-        fallback = [{"title": f"Reference Video {i+1}", "url": url} for i, url in enumerate(urls)]
-        return fallback
+        logging.error("Error fetching YouTube videos: %s", e)
+        return [{"title": "No videos found", "url": ""}]
 
 def get_article_references(prompt: str, n: int = 2) -> list:
     article_prompt = (
@@ -263,13 +280,15 @@ async def generate_video(request_data: VideoGenerationRequest, background_tasks:
         "2️⃣ Points out where the user's answer is missing or incorrect.\n"
         "3️⃣ Provides clear guidance on how to improve."
     )
+    video_key = generate_video_key(prompt)
+    prompt_s3_key = f"prompts/{video_key}.txt"
+    upload_prompt_to_s3(prompt, prompt_s3_key)
     trigger_cloud_run_job(
         job_name="my-worker-job",
         region="us-central1",
         project_id="gen-lang-client-0755469978",
         prompt=prompt
     )
-    video_key = generate_video_key(prompt)
     youtube_refs = get_youtube_references(question)
     article_refs = get_article_references(question)
     return JSONResponse(content={
@@ -317,9 +336,9 @@ async def review_mcq(request_data: MCQReviewRequest, background_tasks: Backgroun
         "2️⃣ If the user's answer is wrong, explains the misconception or error.\n"
         "3️⃣ Provides key concepts to remember for similar questions."
     )
-    youtube_refs = get_youtube_references(question)
-    article_refs = get_article_references(question)
-    # background_tasks.add_task(background_mcq_review, prompt, question)
+    video_key = generate_video_key(prompt)
+    prompt_s3_key = f"prompts/{video_key}.txt"
+    upload_prompt_to_s3(prompt, prompt_s3_key)
     
     trigger_cloud_run_job(
         job_name="my-worker-job",
@@ -327,8 +346,8 @@ async def review_mcq(request_data: MCQReviewRequest, background_tasks: Backgroun
         project_id="gen-lang-client-0755469978",
         prompt=prompt
     )
-    # Generate a deterministic video key for this prompt
-    video_key = generate_video_key(prompt)
+    youtube_refs = get_youtube_references(question)
+    article_refs = get_article_references(question)
     return JSONResponse(content={
         "resources": {
             "video": {
