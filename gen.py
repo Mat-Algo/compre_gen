@@ -565,7 +565,7 @@ VERY IMPORTANT:
 # ── Manim rendering ───────────────────────────────────────────────────────
 def write_temp(code: str):
     uid = uuid.uuid4().hex
-    fname = f"{uid}.py"
+    fname = f"/tmp/{uid}.py"
     with open(fname, 'w', encoding='utf-8') as f:
         f.write(code)
     return fname, uid
@@ -583,7 +583,7 @@ def render_voiceover_scene(py_file: str, base_uuid: str) -> str:
     scene = match.group(1)
 
     # 2) Render with --media_dir to our output folder
-    output_dir = f"{base_uuid}_output"
+    output_dir = f"/tmp/{base_uuid}_output"
     cmd = [
     "manim",
     "-pql",                       # low preview quality
