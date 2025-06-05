@@ -589,8 +589,7 @@ def render_voiceover_scene(py_file: str, base_uuid: str) -> str:
     "-pql",                       # low preview quality
     "--fps", "15",                # cut frames per second in half
     "--resolution", "640,360",    # lower resolution
-    py_file,
-    scene,
+
     "--media_dir", output_dir     # keep media outputs
 ]
 

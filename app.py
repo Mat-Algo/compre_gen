@@ -99,6 +99,7 @@ def trigger_cloud_run_job(job_name, region, project_id, prompt_s3_key):
         "overrides": {
             "containerOverrides": [
                 {
+                    "command": ["python", "worker.py"],
                     "args": [prompt_s3_key]
                 }
             ]
