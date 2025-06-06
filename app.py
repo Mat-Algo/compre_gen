@@ -99,7 +99,7 @@ def trigger_cloud_run_job(job_name, region, project_id, prompt):
         "overrides": {
             "containerOverrides": [
                 {
-                    "args": [prompt_key]
+                    "args": ["worker.py", prompt_key]
                 }
             ]
         }
