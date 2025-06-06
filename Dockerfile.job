@@ -26,4 +26,4 @@ RUN pip install --no-cache-dir -r requirements.txt \
 COPY . .
 
 # Set entrypoint for Cloud Run Job
-CMD ["python", "worker.py"]
+ENTRYPOINT ["python", "worker.py"]
