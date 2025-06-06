@@ -70,25 +70,36 @@ class MCQReviewRequest(BaseModel):
 
 
 def trigger_cloud_run_job(job_name, region, project_id, prompt):
-    # Obtain fresh access token
+    s3_client = boto3.client("s3")
+    prompt_key = f"prompts/{generate_video_key(prompt)}.txt"
+    print(f"Uploading prompt to s3://{S3_BUCKET}/{prompt_key}")
+    s3_client.put_object(
+        Bucket=S3_BUCKET,
+        Key=prompt_key,
+        Body=prompt.encode("utf-8"),
+        ContentType="text/plain"
+    )
+    try:
+        s3_client.head_object(Bucket=S3_BUCKET, Key=prompt_key)
+        print(f"Prompt verified at s3://{S3_BUCKET}/{prompt_key}")
+    except s3_client.exceptions.ClientError as e:
+        print(f"Failed to verify prompt at s3://{S3_BUCKET}/{prompt_key}: {e}")
+        raise
+
     credentials, _ = google.auth.default()
     credentials.refresh(google.auth.transport.requests.Request())
     token = credentials.token
 
-    url = (
-        f"https://run.googleapis.com/v2/projects/{project_id}"
-        f"/locations/{region}/jobs/{job_name}:run"
-    )
+    url = f"https://run.googleapis.com/v2/projects/{project_id}/locations/{region}/jobs/{job_name}:run"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
-    # Use the v2 'overrides' schema to inject your prompt as an arg
     body = {
         "overrides": {
             "containerOverrides": [
                 {
-                    "args": [prompt]
+                    "args": [prompt_key]
                 }
             ]
         }
@@ -96,9 +107,9 @@ def trigger_cloud_run_job(job_name, region, project_id, prompt):
 
     resp = requests.post(url, headers=headers, json=body)
     if resp.status_code == 200:
-        logging.info("Cloud Run Job triggered successfully")
+        print("Cloud Run Job triggered successfully")
     else:
-        logging.error(f"Failed to trigger Cloud Run Job: {resp.text}")
+        print(f"Failed to trigger Cloud Run Job: {resp.text}")
         resp.raise_for_status()
 
 
