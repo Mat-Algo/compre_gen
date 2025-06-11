@@ -306,6 +306,200 @@ This is a non-negotiable requirement. Visual clarity is paramount.
 
 **MANDATORY - Safe Scene Exit:**
 
+REFER THE FOLLOWING TO PREVENT STUFF FROM GOING OUTSIDE FRAME:
+# How to Prevent Text and Objects from Going Out of Frame in Manim
+
+---
+
+## 1. Use the `Paragraph` Class for Automatic Text Wrapping
+
+```python
+from manim import *
+
+class WrappedTextScene(Scene):
+    def construct(self):
+        text = Paragraph(
+            "This is a long piece of text that will automatically wrap "
+            "to stay within the frame. You can adjust the width as needed.",
+            alignment="center",
+            width=6  # Adjust the width to control wrapping
+        )
+        self.add(text)
+```
+
+---
+
+## 2. Utilize LaTeX's `minipage` Environment with `Tex`
+
+```python
+from manim import *
+
+class LaTeXWrappedTextScene(Scene):
+    def construct(self):
+        tex = Tex(
+            r"\begin{{minipage}}{{6cm}}This is a long LaTeX-formatted text that "
+            r"will wrap within the specified minipage width.\end{{minipage}}",
+            tex_environment="flushleft"
+        )
+        self.add(tex)
+```
+
+---
+
+## 3. Scale Text to Fit Within the Frame
+
+```python
+text = Text("Your long text here")
+text.scale(0.5)  # Adjust the scale factor as needed
+```
+
+---
+
+## 4. Wrap Text Inside a Rectangle with Padding
+
+```python
+from manim import *
+
+class TextInRectangleScene(Scene):
+    def construct(self):
+        text = Text("Sample text inside a rectangle")
+        rect = Rectangle(
+            width=text.width + 0.5,
+            height=text.height + 0.5,
+            color=BLUE
+        )
+        rect.surround(text)
+        self.add(rect, text)
+```
+
+---
+
+## 5. Adjust Camera Frame to Fit Content
+
+```python
+self.camera.frame.scale(1.2)  # Zoom out
+```
+
+---
+
+## 6. Use `always_redraw` for Dynamic Content
+
+```python
+from manim import *
+
+class DynamicTextScene(Scene):
+    def construct(self):
+        counter = ValueTracker(0)
+        number = always_redraw(lambda: DecimalNumber(counter.get_value()))
+        self.add(number)
+        self.play(counter.animate.set_value(10), run_time=5)
+```
+
+
+
+REFER THIS TO PREVENT OBEJCTS FROM OVERLAPPTING:
+
+Manim Object Positioning and Overlap Management
+===============================================
+
+1. Preventing Objects from Going Out of Frame
+---------------------------------------------
+- Use `frame_width` and `frame_height`:
+  Define the visible area of the scene. Position your objects within these boundaries.
+
+  Example:
+      from manim import *
+
+      class PositioningExample(Scene):
+          def construct(self):
+              square = Square()
+              square.move_to(LEFT * (config.frame_width / 4))
+              self.add(square)
+
+- Use `to_edge()` and `to_corner()`:
+  Position objects relative to the scene's edges and corners.
+
+  Example:
+      square.to_edge(UP)
+      circle.to_corner(DOWN + RIGHT)
+
+2. Preventing Overlapping Objects
+---------------------------------
+- Use `VGroup` and `arrange()`:
+  Group multiple objects and arrange them with buffers.
+
+  Example:
+      group = VGroup(square, circle, triangle)
+      group.arrange(RIGHT, buff=1)
+      self.add(group)
+
+- Use `shift()`:
+  Adjust positions using the `shift()` method.
+
+  Example:
+      circle.shift(UP * 2)
+
+3. Managing Object Layers and Overlaps
+--------------------------------------
+- Use `z_index`:
+  Set rendering priority of objects.
+
+  Example:
+      square.set_z_index(1)
+      circle.set_z_index(2)
+
+- Use `bring_to_front()` and `bring_to_back()`:
+  Adjust rendering order.
+
+  Example:
+      self.bring_to_front(circle)
+      self.bring_to_back(square)
+
+4. Automatically Removing or Hiding Previous Objects
+----------------------------------------------------
+- Use `FadeOut()`:
+  Animate the removal of objects.
+
+  Example:
+      self.play(FadeOut(square))
+
+- Use `ReplacementTransform()`:
+  Transition from one object to another.
+
+  Example:
+      self.play(ReplacementTransform(old_obj, new_obj))
+
+5. Dynamic Positioning with Updaters
+------------------------------------
+- Use updaters:
+  Dynamically adjust positions during animations.
+
+  Example:
+      def update_position(mob):
+          mob.next_to(other_mobject, RIGHT, buff=0.5)
+      square.add_updater(update_position)
+
+6. Distributing Objects Vertically
+----------------------------------
+- Create custom vertical distribution:
+
+  Example:
+      def distribute_vertically(mobjects, top_anchor, bottom_anchor, buff=0.5):
+          total_height = sum([mob.height for mob in mobjects]) + buff * (len(mobjects) - 1)
+          start_y = top_anchor[1] - total_height / 2
+          for mob in mobjects:
+              mob.move_to(np.array([0, start_y + mob.height / 2, 0]))
+              start_y += mob.height + buff
+
+7. Additional Tips
+------------------
+- Preview scenes often with `self.wait()`.
+- Use `always_redraw()` for dynamic objects:
+
+  Example:
+      dynamic_circle = always_redraw(lambda: Circle().next_to(square, RIGHT))
+      self.add(dynamic_circle)
+
 At the very end of the `construct` method, include this exact block to prevent rendering artifacts or errors on exit:
 ```python
         # Final clean up to ensure smooth exit
@@ -341,9 +535,10 @@ Mentally review the generated code, specifically checking for:
 *   **All Requirements Met:** Have all instructions in this prompt been followed?
 
 VERY IMPORTANT:
+- always use 3D tuples in Manim 
 - MAKE VERY VERY SURE “Before introducing any new major content, you MUST clear the stage of all previously written objects using self.play(FadeOut(...)), self.remove(...), or  self.clear() — no leftover elements are allowed unless explicitly intended to stay.”
 - When you show a new object after explaining an old one makes sure not to overlap the old one, either movie it to the side or top or just remove it..NEVER OVERLAP
-- Also make sure that the objects or text NEVER goes out of frame
+- Also make sure that the objects or text NEVER EVER goes out of frame in any way
 
 
 **Output Format:**
@@ -370,7 +565,7 @@ VERY IMPORTANT:
 # ── Manim rendering ───────────────────────────────────────────────────────
 def write_temp(code: str):
     uid = uuid.uuid4().hex
-    fname = f"{uid}.py"
+    fname = f"/tmp/{uid}.py"
     with open(fname, 'w', encoding='utf-8') as f:
         f.write(code)
     return fname, uid
@@ -388,16 +583,17 @@ def render_voiceover_scene(py_file: str, base_uuid: str) -> str:
     scene = match.group(1)
 
     # 2) Render with --media_dir to our output folder
-    output_dir = f"{base_uuid}_output"
+    output_dir = f"/tmp/{base_uuid}_output"
     cmd = [
     "manim",
-    "-pql",                       # low preview quality
-    "--fps", "15",                # cut frames per second in half
-    "--resolution", "640,360",    # lower resolution
-    py_file,
-    scene,
-    "--media_dir", output_dir     # keep media outputs
+    py_file,       # e.g., /tmp/b4744b3e17ff4386b389ec9865b9cdea.py
+    scene,         # the class name of your scene (e.g., TopicVoiceoverScene)
+    "-pql",
+    "--fps", "15",
+    "--resolution", "640,360",
+    "--media_dir", output_dir
 ]
+
 
     logging.info("Running Manim command: %s", " ".join(cmd))
     try:

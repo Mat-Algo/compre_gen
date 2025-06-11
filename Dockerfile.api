@@ -37,7 +37,10 @@ WORKDIR /var/task
 
 # Install torch CPU directly first (avoiding conflicts)
 COPY requirements.txt ./
-RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --upgrade pip && \
+    pip install --no-cache-dir \
+    -f https://download.pytorch.org/whl/cpu/torch_stable.html \
+    -r requirements.txt
 
 RUN python -c "from sentence_transformers import SentenceTransformer; SentenceTransformer('all-MiniLM-L6-v2')"
 
@@ -48,4 +51,5 @@ COPY . .
 EXPOSE 8080
 
 # Start FastAPI app using gunicorn + uvicorn worker
-CMD ["sh", "-c", "exec gunicorn app:app -k uvicorn.workers.UvicornWorker --bind 0.0.0.0:${PORT:-8080} --timeout 300"]
+CMD ["gunicorn", "app:app", "-k", "uvicorn.workers.UvicornWorker", "--bind", "0.0.0.0:8080", "--timeout", "300"]
+

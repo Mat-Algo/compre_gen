@@ -22,6 +22,7 @@ load_dotenv(override=True)
 
 
 GEMINI_API_KEY = os.getenv("GEMINI_API_KEY")
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
 os.environ["PATH"] += os.pathsep + "/usr/bin"
@@ -70,25 +71,36 @@ class MCQReviewRequest(BaseModel):
 
 
 def trigger_cloud_run_job(job_name, region, project_id, prompt):
-    # Obtain fresh access token
+    s3_client = boto3.client("s3")
+    prompt_key = f"prompts/{generate_video_key(prompt)}.txt"
+    print(f"Uploading prompt to s3://{S3_BUCKET}/{prompt_key}")
+    s3_client.put_object(
+        Bucket=S3_BUCKET,
+        Key=prompt_key,
+        Body=prompt.encode("utf-8"),
+        ContentType="text/plain"
+    )
+    try:
+        s3_client.head_object(Bucket=S3_BUCKET, Key=prompt_key)
+        print(f"Prompt verified at s3://{S3_BUCKET}/{prompt_key}")
+    except s3_client.exceptions.ClientError as e:
+        print(f"Failed to verify prompt at s3://{S3_BUCKET}/{prompt_key}: {e}")
+        raise
+
     credentials, _ = google.auth.default()
     credentials.refresh(google.auth.transport.requests.Request())
     token = credentials.token
 
-    url = (
-        f"https://run.googleapis.com/v2/projects/{project_id}"
-        f"/locations/{region}/jobs/{job_name}:run"
-    )
+    url = f"https://run.googleapis.com/v2/projects/{project_id}/locations/{region}/jobs/{job_name}:run"
     headers = {
         "Authorization": f"Bearer {token}",
         "Content-Type": "application/json"
     }
-    # Use the v2 'overrides' schema to inject your prompt as an arg
     body = {
         "overrides": {
             "containerOverrides": [
                 {
-                    "args": [prompt]
+                    "args": [prompt_key],
                 }
             ]
         }
@@ -96,9 +108,9 @@ def trigger_cloud_run_job(job_name, region, project_id, prompt):
 
     resp = requests.post(url, headers=headers, json=body)
     if resp.status_code == 200:
-        logging.info("Cloud Run Job triggered successfully")
+        print("Cloud Run Job triggered successfully")
     else:
-        logging.error(f"Failed to trigger Cloud Run Job: {resp.text}")
+        print(f"Failed to trigger Cloud Run Job: {resp.text}")
         resp.raise_for_status()
 
 
@@ -127,28 +139,34 @@ def upload_file_to_s3(local_path: str, s3_key: str) -> str:
 # Helper Functions for Reference Retrieval (unchanged)
 ###############################################################################
 def get_youtube_references(prompt: str, n: int = 3) -> list:
-    youtube_prompt = (
-        f"Provide {n} YouTube video URLs that best explain the topic in: {prompt}. "
-        "Return as a JSON array of objects with 'title' and 'url' fields."
+    """
+    Use the YouTube Data API to fetch relevant videos for the given prompt.
+    Returns a list of dicts with 'title' and 'url'.
+    """
+    search_query = prompt
+    url = (
+        f"https://www.googleapis.com/youtube/v3/search"
+        f"?part=snippet&maxResults={n}&q={requests.utils.quote(search_query)}"
+        f"&key={YOUTUBE_API_KEY}&type=video"
     )
-    response = client.models.generate_content(model="gemini-2.0-flash", contents=youtube_prompt)
-    raw = response.text.strip()
-    if raw.startswith("```"):
-        lines = raw.splitlines()
-        if lines[0].startswith("```"):
-            lines = lines[1:]
-        if lines and lines[-1].startswith("```"):
-            lines = lines[:-1]
-        raw = "\n".join(lines).strip()
+
     try:
-        parsed = json.loads(raw)
-        logging.info("Parsed YouTube references: %s", parsed)
-        return parsed
+        response = requests.get(url)
+        response.raise_for_status()
+        data = response.json()
+        results = []
+
+        for item in data.get("items", []):
+            video_id = item["id"].get("videoId")
+            title = item["snippet"]["title"]
+            if video_id:
+                video_url = f"https://www.youtube.com/watch?v={video_id}"
+                results.append({"title": title, "url": video_url})
+
+        return results
     except Exception as e:
-        logging.error("Error parsing YouTube JSON: %s", e)
-        urls = [u.strip() for u in raw.splitlines() if u.strip().startswith("http")]
-        fallback = [{"title": f"Reference Video {i+1}", "url": url} for i, url in enumerate(urls)]
-        return fallback
+        logging.error("Error fetching YouTube videos: %s", e)
+        return [{"title": "No videos found", "url": ""}]
 
 def get_article_references(prompt: str, n: int = 2) -> list:
     article_prompt = (
@@ -263,13 +281,29 @@ async def generate_video(request_data: VideoGenerationRequest, background_tasks:
         "2️⃣ Points out where the user's answer is missing or incorrect.\n"
         "3️⃣ Provides clear guidance on how to improve."
     )
+    video_key = generate_video_key(prompt)
+    json_key = f"{video_key}.json"
+
+    s3_client = boto3.client("s3")
+    # 1) Check if we've already generated this
+    try:
+        s3_client.head_object(Bucket=S3_BUCKET, Key=json_key)
+        # If it exists, just fetch and return it immediately
+        obj = s3_client.get_object(Bucket=S3_BUCKET, Key=json_key)
+        existing = json.loads(obj["Body"].read().decode("utf-8"))
+        return JSONResponse(content=existing, status_code=200)
+    except s3_client.exceptions.ClientError as e:
+        if e.response['Error']['Code'] != '404':
+            # Some other S3 error
+            logging.error("Error checking S3 for existing JSON: %s", e)
+            raise HTTPException(status_code=500, detail="Error checking cache")
+        
     trigger_cloud_run_job(
         job_name="my-worker-job",
         region="us-central1",
         project_id="gen-lang-client-0755469978",
         prompt=prompt
     )
-    video_key = generate_video_key(prompt)
     youtube_refs = get_youtube_references(question)
     article_refs = get_article_references(question)
     return JSONResponse(content={

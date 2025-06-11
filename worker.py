@@ -5,7 +5,6 @@ import json
 import os
 from app import background_video_generation, get_youtube_references, get_article_references  
 
-# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s [%(levelname)s] %(message)s",
@@ -13,7 +12,6 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-# S3 configuration
 S3_BUCKET = os.getenv("S3_BUCKET", "compre-gen-vid")
 if not S3_BUCKET:
     logger.error("S3_BUCKET environment variable not set")
@@ -22,10 +20,21 @@ if not S3_BUCKET:
 if __name__ == "__main__":
     try:
         if len(sys.argv) < 2:
-            logger.error("No prompt provided. Usage: worker.py <prompt>")
+            logger.error("No prompt key provided. Usage: worker.py <prompt_key>")
             sys.exit(1)
-        prompt = sys.argv[1]
-        logger.info("Cloud Run job started with prompt: %s", prompt)
+        prompt_key = sys.argv[1]
+        logger.info(f"Received prompt key: {prompt_key}")
+        
+        # Retrieve prompt from S3
+        s3_client = boto3.client("s3")
+        logger.info(f"Fetching prompt from s3://{S3_BUCKET}/{prompt_key}")
+        try:
+            prompt_obj = s3_client.get_object(Bucket=S3_BUCKET, Key=prompt_key)
+            prompt = prompt_obj["Body"].read().decode("utf-8")
+            logger.info(f"Prompt retrieved: {prompt[:100]}")
+        except s3_client.exceptions.NoSuchKey:
+            logger.error(f"S3 object not found: s3://{S3_BUCKET}/{prompt_key}")
+            sys.exit(1)
 
         # Call background_video_generation
         logger.info("Running background video generation...")
@@ -62,10 +71,9 @@ if __name__ == "__main__":
         logger.info("JSON serialized: %s", json_body[:500])
 
         # Upload JSON to S3
-        s3 = boto3.client("s3")
         json_key = f"{video_key}.json"
         logger.info("Uploading JSON to s3://%s/%s", S3_BUCKET, json_key)
-        s3.put_object(
+        s3_client.put_object(
             Bucket=S3_BUCKET,
             Key=json_key,
             Body=json_body.encode("utf-8"),
