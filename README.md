@@ -149,4 +149,4 @@ Feel free to open issues or submit PRs. Please adhere to existing code style and
 
 ## License
 
-MIT © Your Name
+MIT license
